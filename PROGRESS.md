@@ -3,7 +3,29 @@
 Shared status file for coordinating Claude Code (repo/backend execution) and Claude Cowork (planning/docs/research) on this project. Whoever touches this project next — either tool, either session — should read this file first and update it before signing off.
 
 ## Current phase / sprint
-Phase 1, Sprint 1 (Foundation) — **code complete and verified end to end** as of 2026-08-23, running on local Postgres. Sprint 2 (PDF processing) is not started and nothing from it has been implemented.
+Phase 1, **Sprint 2 (PDF processing) — code complete and verified end to end** as of 2026-08-24. Sprint 1 archived at `tasks/sprint-1.md`; Sprint 2 record at `tasks/todo.md`. Sprint 3 (chunking + embeddings) is not started.
+
+**Verified working** (each actually run, not assumed):
+- **54/54 backend tests passing** (15 at end of Sprint 1).
+- Extraction end to end in a browser: upload → background extraction → `ready`, with page count, title, and authors populated from the PDF.
+- Page boundaries and reading order preserved; verified by reading extracted text against the source, not just by assertion.
+- De-hyphenation correct in both directions: `break-\nthroughs` → `breakthroughs`, while `state-\nof-the-art` keeps its real hyphen.
+- Section detection with correct nesting (`3.1` renders as level 2 under `3 Methods`) and correct page attribution; running headers are not counted as repeat sections.
+- Duplicate re-upload rejected with 409 naming the existing file; the same PDF in a different project is still accepted. Backed by `UNIQUE(project_id, sha256)`, asserted at the database level in a test.
+- Failure path: corrupt PDF → job `failed` at stage `parsing`, real error shown in the UI, Retry offered, no partial pages or sections written.
+- Retry works: a failed paper reprocesses to `ready`, and repeated reprocessing does not duplicate pages or sections.
+- Stranded jobs recovered on startup, including papers uploaded before extraction existed.
+
+**Not yet confirmed / deliberately absent:** Supabase still entirely unwired. No auth. No chunking, token counting, or embeddings (`paper_pages.token_count` is deliberately NULL — Sprint 3). Extraction is in-process, so it does not survive a server restart mid-run; that is the accepted tradeoff, mitigated by startup recovery rather than eliminated.
+
+### Sprint 2 decisions (resolved 2026-08-24, both were blocking)
+- **Duplicate policy: per-project, reject with 409.** Same sha256 already in the *same* project is a duplicate and is rejected, returning the existing paper's id so the UI can point at it. The same PDF in a *different* project stays a separate paper record. *Why:* global dedup would couple projects together — deleting a paper in one project would affect another, which complicates every later sprint. *How to apply:* enforced by a `UNIQUE(project_id, sha256)` constraint so the database guarantees it rather than app code alone.
+- **Job execution: FastAPI BackgroundTasks, in-process.** Upload returns immediately; extraction runs after the response. *Why:* no new libraries or infrastructure beyond PRD Section 6, while keeping status visible and jobs retryable. *Known tradeoff, handled explicitly:* jobs die if the process is killed mid-run, so startup recovery marks stranded `running` jobs as failed and retryable. Revisit a real worker only if ingestion volume justifies it.
+
+### ⚠️ Gap found in the PRD — needs a Cowork decision, not a silent patch
+PRD **Section 12 requires "basic section info retained"**, but the **Section 7 schema has nowhere to put it**. The only `section` field is on `paper_chunks`, which is a Sprint 3 entity — so satisfying a Sprint 2 acceptance criterion would require writing to a Sprint 3 table, which is phase bleeding.
+
+Proceeding with a new **`paper_sections` table** (sections span multiple pages, so hanging them off a single `paper_pages` row would be wrong). Flagging rather than quietly amending Section 7: **Section 7 should be updated to include `paper_sections` as a Phase 1 entity.**
 
 **Verified working** (not assumed — each was actually run):
 - docker-compose Postgres 17 + pgvector, healthy; `vector` + `pgcrypto` extensions enabled.
@@ -32,12 +54,13 @@ This file is the shared source of truth between Claude Code (implementation) and
 - **Migrations: plain numbered SQL files + a small runner script**, no ORM/Alembic. *Why:* PRD Section 6 lists no migration library, four tables do not justify one, and plain SQL matches the format the Supabase CLI already consumes — making the eventual move a file move rather than a rewrite.
 - **DB access: raw SQL via a Postgres driver, no ORM.** *Why:* Section 6 specifies FastAPI + Pydantic only; Sprint 1 has a handful of queries and an ORM would be over-engineering at this scope.
 
-## Handoff notes for Sprint 2
-- Implement against the interfaces in `apps/api/app/services/providers.py` (`DocumentParser` first, for PyMuPDF) rather than calling libraries directly from route handlers.
-- `papers.sha256` is already populated on upload; duplicate detection using it is Sprint 2's job. `idx_papers_sha256` exists but is deliberately **not** a uniqueness constraint — decide the dedup policy (reject vs. link to existing) before making it one.
-- `processing_jobs` rows are created but nothing consumes them. Sprint 2 needs to decide how jobs are run (inline vs. background worker); the `status`/`stage`/`progress`/`error` columns are already shaped for a real pipeline.
-- `paper_chunks.embedding` is an unconstrained `vector` with no ANN index. Both the dimensionality and the index type should be set in Sprint 3 once the embedding model is chosen — picking either now would be guesswork.
-- The frontend does not poll for status; it refetches after upload and on project switch. Polling or streaming becomes worthwhile only once jobs actually progress.
+## Handoff notes for Sprint 3
+- **Chunk from `paper_pages.cleaned_text`, not `raw_text`.** Paragraph breaks (`\n\n`) survive normalization and are the natural chunk boundary. This nearly did not work — see the normalization ordering bug in the log below — so there is now a regression test (`test_whitespace_padded_blank_lines_still_break_paragraphs`) guarding it. Do not reorder the steps in `normalization.py` without rerunning it.
+- **Map chunks to sections via `paper_sections.start_offset`**, which is an offset into that page's `cleaned_text`. It is NULL when the heading could not be located after normalization; handle that rather than assuming it is set.
+- `paper_pages.token_count` is intentionally NULL everywhere. Token counting is a Sprint 3 deliverable and needs a tokenizer choice first — that choice is not made yet and is not implied by anything in the codebase.
+- `paper_chunks.embedding` is still an unconstrained `vector` with no ANN index. Set dimensionality and index type once the embedding model is chosen; picking either now is guesswork.
+- **Test isolation is a known weakness.** Tests run against the same local database as the app, and `recover_stranded_jobs()` is global — running the suite mutates non-test rows. It genuinely did so during Sprint 2. Before the suite grows further, point tests at a separate database.
+- Extraction is in-process (`BackgroundTasks`). If Sprint 3 makes ingestion meaningfully slower (embedding API calls will), revisit the worker decision — the tradeoff was accepted for Sprint 2's workload, not permanently.
 
 ## Known unresolved issues in the PRD (flagged during Cowork review)
 - Section 12 requires retrieval to be "measurable against benchmark data" before Phase 2 starts, but the benchmark (Sprint 6) is scheduled after the sprints that criterion gates. Needs a decision: pull a rough benchmark earlier, or treat the criterion as unenforceable until Sprint 6.
@@ -50,6 +73,9 @@ This file is the shared source of truth between Claude Code (implementation) and
 - Training-scale corpus (S2ORC / PMC): on hold pending the Phase 6 scope decision above.
 
 ## Log
+- **2026-08-24** — **Sprint 2 complete, 54/54 tests passing.** Frontend updated: live status polling (only while a job is actually in flight), page counts, expandable section outline with nesting, per-paper error display, and a Retry button. **Two further bugs found by verifying rather than reviewing:** (1) papers uploaded before extraction existed sat at `pending` forever with no recovery path and caused the UI to poll indefinitely — startup recovery now also strands `pending` jobs, and Retry is offered for them; (2) **normalization destroyed every paragraph break** — PDFs pad "blank" lines with spaces, and single newlines were collapsed to spaces *before* that padding was trimmed, so `\n\n` never formed. This would have left Sprint 3's paragraph-aware chunker with no boundaries to chunk on. Fixed by trimming whitespace around line breaks first; confirmed on a real PDF (page 1 went from 0 to 2 paragraph breaks) and covered by a regression test.
+- **2026-08-24** — **Sprint 2 backend complete: 52/52 tests passing** (was 15 at end of Sprint 1). Migration `0003` adds `paper_sections`, `UNIQUE(project_id, sha256)`, and job retry columns. `PyMuPDFParser` implements the widened `DocumentParser`; extraction runs as a background task and writes pages, sections, and metadata. Added `GET /papers/{id}/pages`, `GET /papers/{id}/sections`, `POST /papers/{id}/reprocess`, plus startup recovery for jobs stranded by a restart. **Three bugs found by tests, all real:** (1) section detection ran on normalized text, but normalization collapses the newlines that make a heading identifiable — detection now reads raw text and resolves offsets into cleaned text; (2) abstract extraction had the same root cause and is now derived from detected section boundaries; (3) de-hyphenation turned `state-\nof-the-art` into `stateof-the-art` because the greedy quantifier backtracked to a partial word. Frontend not updated yet at time of writing.
+- **2026-08-24** — **Sprint 2 opened.** Reread PROGRESS.md first (no Cowork changes since 2026-08-23). Confirmed PyMuPDF 1.28.2 installs and imports on this Python 3.14 venv before planning around it. Restored the stack after an overnight restart — Docker volume persisted, migrations still applied, Sprint 1 data intact. Both blocking Sprint 2 decisions resolved (see above). Sprint 1 plan archived to `tasks/sprint-1.md`; `tasks/todo.md` is now the Sprint 2 plan. **Flagged a PRD schema gap** (Section 12 needs section storage that Section 7 does not define) — see above; Cowork should update Section 7.
 - **2026-08-23** — PRD reviewed and cleaned up into `PRD.md`. Sequencing gap in Section 12 flagged. Sprint 1 Claude Code prompt drafted. Dataset sourcing links researched and compiled. Folder seeded for Code/Cowork coordination.
 - **2026-08-23** — Sprint 1 prompt updated to require Claude Code to read `PROGRESS.md`/`PRD.md` first and update `PROGRESS.md` continuously (not just at session end) as it works. Prompt finalized at `claude_code_sprint1_prompt.md` and ready to hand off.
 - **2026-08-23** — Closed the matching gap on the Cowork side: added a binding rule (above) that any Cowork session reads this file first by default, not only when the user asks. Going forward, Cowork should re-fetch this file before any Sprint 2+ planning, dataset guidance, or PRD changes.

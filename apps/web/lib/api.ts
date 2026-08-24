@@ -1,4 +1,4 @@
-import type { Paper, Project } from "@/types/api";
+import type { Paper, PaperSection, Project } from "@/types/api";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -19,7 +19,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let detail = `Request failed (${response.status})`;
     try {
       const body = await response.json();
-      if (typeof body?.detail === "string") detail = body.detail;
+      if (typeof body?.detail === "string") {
+        detail = body.detail;
+      } else if (typeof body?.detail?.message === "string") {
+        // Structured errors (e.g. duplicate upload) carry extra fields.
+        detail = body.detail.message;
+      }
     } catch {
       /* response had no JSON body; keep the status-based message */
     }
@@ -49,3 +54,9 @@ export const uploadPaper = (projectId: string, file: File) => {
     body: form,
   });
 };
+
+export const listSections = (paperId: string) =>
+  request<PaperSection[]>(`/papers/${paperId}/sections`);
+
+export const reprocessPaper = (paperId: string) =>
+  request<Paper>(`/papers/${paperId}/reprocess`, { method: "POST" });

@@ -3,9 +3,10 @@
 Multimodal research-paper understanding, built phase by phase from a text-RAG foundation.
 See [PRD.md](PRD.md) for scope and [PROGRESS.md](PROGRESS.md) for live project state.
 
-> **Current state: Phase 1, Sprint 1 (Foundation).**
-> Upload and storage only. No text extraction, chunking, embeddings, retrieval, or LLM calls —
-> those are Sprints 2–4 and are deliberately not implemented.
+> **Current state: Phase 1, Sprint 2 (PDF processing).**
+> Upload, storage, and text extraction — pages, metadata, and detected sections.
+> No chunking, embeddings, retrieval, or LLM calls; those are Sprints 3–4 and are
+> deliberately not implemented.
 
 ## Prerequisites
 
@@ -84,24 +85,37 @@ scripts/           Operational scripts
 storage/           Uploaded PDFs (git-ignored, created at runtime)
 ```
 
-## What Sprint 1 covers
+## API
 
 | Endpoint | Purpose |
 |---|---|
 | `GET /health` | Reports real database and storage reachability; 503 when degraded |
 | `POST /projects` · `GET /projects` · `GET /projects/{id}` | Create and select projects |
-| `POST /projects/{id}/papers` | Validate a PDF, store it, create `papers` + `processing_jobs` rows |
-| `GET /projects/{id}/papers` · `GET /papers/{id}` | Processing status for the UI |
+| `POST /projects/{id}/papers` | Validate a PDF, store it, and queue extraction. 409 if that PDF is already in the project |
+| `GET /projects/{id}/papers` · `GET /papers/{id}` | Papers with their latest job status |
+| `GET /papers/{id}/pages` | Extracted page text, in page order |
+| `GET /papers/{id}/sections` | Detected sections, in document order |
+| `POST /papers/{id}/reprocess` | Retry extraction for a failed or stranded paper |
 
-Processing jobs are created in `pending` and nothing consumes them yet — the ingestion
-pipeline is Sprint 2.
+### How extraction runs
+
+Upload returns immediately and extraction runs in-process as a FastAPI background task,
+walking the job through `downloading → parsing → persisting → complete`. Because it is
+in-process, it does not survive a server restart mid-run — on startup, any job left
+`running` or `pending` is marked failed with an explanation and can be retried from the UI.
 
 ## Notes for the next sprint
 
-- `app/services/providers.py` holds signature-only interfaces for `DocumentParser`,
-  `EmbeddingProvider`, `RerankerProvider`, and `LLMProvider`. Implement against these
-  rather than calling providers directly.
-- `papers.sha256` is populated on upload, but duplicate detection using it is Sprint 2.
-- `paper_pages`, `paper_chunks`, `conversations`, `messages`, and `citations` exist as
-  empty table shells. `paper_chunks.embedding` has no dimensionality or ANN index yet —
-  both wait until the embedding model is chosen in Sprint 3.
+- `app/services/providers.py` holds the provider interfaces. `DocumentParser` is
+  implemented (`parsing.py`, the only module importing PyMuPDF); `EmbeddingProvider`,
+  `RerankerProvider`, and `LLMProvider` remain signature-only until Sprints 3–4.
+- **Chunk from `paper_pages.cleaned_text`.** Paragraph breaks (`\n\n`) survive
+  normalization and are the natural boundary. The ordering of steps in
+  `normalization.py` is load-bearing for this — a regression test guards it.
+- `paper_sections.start_offset` indexes into that page's `cleaned_text`, and is NULL
+  when the heading could not be relocated. Handle the NULL.
+- `paper_pages.token_count` is deliberately NULL — token counting is Sprint 3 and needs
+  a tokenizer choice first.
+- `paper_chunks.embedding` has no dimensionality or ANN index yet; both wait until the
+  embedding model is chosen.
+- Tests currently share this database. Point them at a separate one before the suite grows.

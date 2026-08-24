@@ -44,6 +44,18 @@ export default function Home() {
   // previous project's papers while the new list is in flight.
   const visiblePapers = papers.filter((p) => p.project_id === selectedId);
 
+  // Extraction runs in the background, so poll only while something is
+  // actually in flight — and stop as soon as nothing is.
+  const isProcessing = visiblePapers.some(
+    (p) => p.job?.status === "pending" || p.job?.status === "running",
+  );
+
+  useEffect(() => {
+    if (!isProcessing || !selectedId) return;
+    const timer = setInterval(() => refreshPapers(selectedId), 1000);
+    return () => clearInterval(timer);
+  }, [isProcessing, selectedId, refreshPapers]);
+
   async function handleSelect(projectId: string) {
     setSelectedId(projectId);
     await refreshPapers(projectId);
@@ -72,6 +84,16 @@ export default function Home() {
     }
   }
 
+  async function handleRetry(paperId: string) {
+    setError(null);
+    try {
+      await api.reprocessPaper(paperId);
+      if (selectedId) await refreshPapers(selectedId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   return (
     <main className="mx-auto min-h-screen max-w-5xl px-6 py-12">
       <header className="mb-10">
@@ -79,7 +101,7 @@ export default function Home() {
           Research Intelligence
         </h1>
         <p className="mt-1 text-sm text-neutral-500">
-          Phase 1 · Sprint 1 — upload and storage only. No retrieval yet.
+          Phase 1 · Sprint 2 — upload, extraction, and sections. No retrieval yet.
         </p>
       </header>
 
@@ -112,6 +134,7 @@ export default function Home() {
             papers={visiblePapers}
             disabled={!selectedId}
             onUpload={handleUpload}
+            onRetry={handleRetry}
           />
         </div>
       )}

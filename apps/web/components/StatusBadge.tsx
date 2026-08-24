@@ -18,18 +18,21 @@ export function StatusBadge({ paper }: { paper: Paper }) {
       : job.status
     : "no job";
 
+  const inFlight = status === "pending" || status === "running";
+
   return (
-    <div className="flex flex-col items-end gap-1">
-      <span
-        className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${STYLES[status] ?? STYLES.none}`}
-      >
-        {label}
-      </span>
-      {job?.error && (
-        <span className="max-w-xs text-right text-xs text-red-600 dark:text-red-400">
-          {job.error}
-        </span>
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${
+        STYLES[status] ?? STYLES.none
+      }`}
+    >
+      {inFlight && (
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
       )}
-    </div>
+      {label}
+      {inFlight && job && job.progress > 0 && (
+        <span className="opacity-70">{Math.round(job.progress * 100)}%</span>
+      )}
+    </span>
   );
 }

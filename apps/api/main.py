@@ -8,6 +8,7 @@ from app.api import health, papers, projects
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.db.session import close_pool
+from app.services.ingestion import recover_stranded_jobs
 
 log = get_logger(__name__)
 
@@ -18,6 +19,9 @@ async def lifespan(app: FastAPI):
     configure_logging(settings.log_level)
     settings.storage_root.mkdir(parents=True, exist_ok=True)
     log.info("API starting — storage=%s", settings.storage_backend)
+    # Extraction runs in-process, so a job left 'running' is one a previous
+    # process died holding. Fail it now so it is visible and retryable.
+    recover_stranded_jobs()
     yield
     close_pool()
     log.info("API stopped")

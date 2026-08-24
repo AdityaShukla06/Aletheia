@@ -24,8 +24,27 @@ class ProcessingJob(BaseModel):
     stage: str | None
     progress: float
     error: str | None
+    attempts: int = 0
     created_at: datetime
     updated_at: datetime
+
+
+class PaperPage(BaseModel):
+    id: UUID
+    paper_id: UUID
+    page_number: int
+    cleaned_text: str | None
+    character_count: int | None
+
+
+class PaperSection(BaseModel):
+    id: UUID
+    paper_id: UUID
+    title: str
+    level: int
+    section_index: int
+    start_page: int
+    start_offset: int | None
 
 
 class Paper(BaseModel):

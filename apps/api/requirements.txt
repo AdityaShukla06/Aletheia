@@ -6,6 +6,9 @@ psycopg[binary]==3.2.12
 psycopg-pool==3.2.6
 python-multipart==0.0.20
 
+# PDF text extraction (PRD Section 6). Only imported by app/services/parsing.py.
+pymupdf==1.28.2
+
 # Tests
 pytest==8.4.2
 httpx==0.28.1

@@ -16,8 +16,19 @@ export interface ProcessingJob {
   stage: string | null;
   progress: number;
   error: string | null;
+  attempts: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface PaperSection {
+  id: string;
+  paper_id: string;
+  title: string;
+  level: number;
+  section_index: number;
+  start_page: number;
+  start_offset: number | null;
 }
 
 export interface Paper {
