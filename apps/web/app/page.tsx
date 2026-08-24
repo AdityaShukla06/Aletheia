@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { PaperPanel } from "@/components/PaperPanel";
 import { ProjectPanel } from "@/components/ProjectPanel";
+import { SearchPanel } from "@/components/SearchPanel";
 import * as api from "@/lib/api";
 import type { Paper, Project } from "@/types/api";
 
@@ -101,7 +102,8 @@ export default function Home() {
           Research Intelligence
         </h1>
         <p className="mt-1 text-sm text-neutral-500">
-          Phase 1 · Sprint 2 — upload, extraction, and sections. No retrieval yet.
+          Phase 1 · Sprint 3 — extraction, chunking, and semantic search. No
+          reranking or generated answers yet.
         </p>
       </header>
 
@@ -137,6 +139,14 @@ export default function Home() {
             onRetry={handleRetry}
           />
         </div>
+      )}
+
+      {!loading && (
+        <SearchPanel
+          projectId={selectedId}
+          hasReadyPapers={visiblePapers.some((p) => p.status === "ready")}
+          onError={setError}
+        />
       )}
     </main>
   );

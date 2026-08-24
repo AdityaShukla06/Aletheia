@@ -1,4 +1,4 @@
-import type { Paper, PaperSection, Project } from "@/types/api";
+import type { Paper, PaperSection, Project, SearchResult } from "@/types/api";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -60,3 +60,10 @@ export const listSections = (paperId: string) =>
 
 export const reprocessPaper = (paperId: string) =>
   request<Paper>(`/papers/${paperId}/reprocess`, { method: "POST" });
+
+export const searchProject = (projectId: string, query: string, topK?: number) =>
+  request<SearchResult[]>(`/projects/${projectId}/search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, top_k: topK ?? null }),
+  });

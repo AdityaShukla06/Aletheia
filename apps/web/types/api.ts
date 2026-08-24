@@ -21,6 +21,19 @@ export interface ProcessingJob {
   updated_at: string;
 }
 
+export interface SearchResult {
+  chunk_id: string;
+  paper_id: string;
+  paper_title: string | null;
+  filename: string;
+  content: string;
+  section: string | null;
+  chunk_index: number;
+  token_count: number | null;
+  page_number: number | null;
+  similarity: number;
+}
+
 export interface PaperSection {
   id: string;
   paper_id: string;

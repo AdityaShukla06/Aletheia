@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import health, papers, projects
+from app.api import health, papers, projects, search
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.db.session import close_pool
@@ -55,3 +55,4 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 app.include_router(health.router)
 app.include_router(projects.router)
 app.include_router(papers.router)
+app.include_router(search.router)

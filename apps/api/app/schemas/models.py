@@ -64,6 +64,24 @@ class PaperWithJob(Paper):
     job: ProcessingJob | None = None
 
 
+class SearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    top_k: int | None = Field(default=None, ge=1, le=100)
+
+
+class SearchResult(BaseModel):
+    chunk_id: UUID
+    paper_id: UUID
+    paper_title: str | None
+    filename: str
+    content: str
+    section: str | None
+    chunk_index: int
+    token_count: int | None
+    page_number: int | None
+    similarity: float
+
+
 class HealthResponse(BaseModel):
     status: str
     database: str
