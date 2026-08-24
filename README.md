@@ -1,36 +1,62 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Aletheia
 
-## Getting Started
+Aletheia (working name "The Archive") is a research intelligence workspace for
+reading, organizing, and cross-checking academic papers. It's built around a
+few core ideas: a library of uploaded papers, a distraction-free reader with
+an extraction panel for figures/tables/equations/citations, semantic search,
+cross-paper claim comparison, per-claim verification against linked evidence,
+and a reproducibility checklist tied to a paper's code repo.
 
-First, run the development server:
+Right now this is a frontend build against mock data — there's no backend or
+persistence layer wired up yet. Every page renders from fixtures in
+`lib/mock-data.ts` so the UI and interactions can be reviewed end to end
+before any of it talks to a real API.
+
+## Stack
+
+- Next.js 16 (App Router) with TypeScript
+- Tailwind CSS v4, theme tokens defined as CSS variables in `app/globals.css`
+  and mapped in `tailwind.config.ts`
+- Fraunces, Source Serif 4, Inter, and JetBrains Mono via `next/font/google`
+
+## Running it locally
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Then open `http://localhost:3000`. It redirects straight to `/library`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Layout
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```
+app/
+  (app)/          authenticated shell: sidebar + topbar, one folder per page
+    library/
+    search/
+    upload/
+    paper/[id]/   the reader
+    cross-paper/
+    claim-verification/
+    reproducibility/
+    settings/
+  (auth)/
+    sign-in/
+components/       shared UI pieces (cards, badges, tables, the sidebar/topbar)
+lib/
+  mock-data.ts    every fixture the pages render from
+```
 
-## Learn More
+The two route groups exist because they need different chrome: `(app)` renders
+the sidebar and topbar around every page, `(auth)` just centers its content
+with no navigation.
 
-To learn more about Next.js, take a look at the following resources:
+## Notes
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Search filtering, the upload dropzone's drag state, tab switching in the
+  reader's extraction panel, and the settings provider picker are all real
+  client-side interactions — they just don't persist anywhere yet.
+- The status/badge patterns (paper status, claim agreement, claim
+  verification, reproducibility checks) share a small set of primitives in
+  `components/Badge.tsx` rather than each being a one-off.
