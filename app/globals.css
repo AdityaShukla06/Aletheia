@@ -1,0 +1,36 @@
+@import "tailwindcss";
+@config "../tailwind.config.ts";
+
+:root {
+  /* Backgrounds */
+  --bg-base: #14110d;
+  --bg-surface: #1c1712;
+  --bg-surface-raised: #241d16;
+
+  /* Borders */
+  --border-hairline: #4a3c2c;
+  --border-hairline-subtle: #2e2620;
+
+  /* Text */
+  --text-primary: #ede6d6;
+  --text-secondary: #b8a88f;
+  --text-muted: #7a6b58;
+
+  /* Accents */
+  --accent-brass: #b08d57;
+  --accent-brass-bright: #d4af6a;
+  --accent-oxblood: #7b2d26;
+  --accent-oxblood-bright: #a13b31;
+  --accent-forest: #3f4d3d;
+  --accent-forest-bright: #56694f;
+
+  /* Status */
+  --status-success: #5c7a5a;
+  --status-warning: #c08a3e;
+  --status-error: #a13b31;
+}
+
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+}
