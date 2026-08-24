@@ -1,0 +1,16 @@
+import Sidebar from "@/components/Sidebar";
+import Topbar from "@/components/Topbar";
+
+export default function AppLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex h-full w-full items-start overflow-hidden bg-base">
+      <Sidebar />
+      <div className="flex h-full min-w-px flex-1 flex-col items-start overflow-hidden">
+        <Topbar />
+        <main className="flex w-full min-h-px flex-1 flex-col items-start gap-6 overflow-y-auto px-10 py-8">
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}
