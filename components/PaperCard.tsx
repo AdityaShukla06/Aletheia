@@ -1,9 +1,13 @@
+import Link from "next/link";
 import StatusBadge from "@/components/StatusBadge";
 import type { Paper } from "@/lib/mock-data";
 
 export default function PaperCard({ paper }: { paper: Paper }) {
   return (
-    <div className="flex w-[410px] shrink-0 flex-col items-start gap-[14px] rounded-md border border-hairline-subtle bg-surface p-5">
+    <Link
+      href={`/paper/${paper.id}`}
+      className="flex w-[410px] shrink-0 flex-col items-start gap-[14px] rounded-md border border-hairline-subtle bg-surface p-5 transition-colors hover:border-hairline"
+    >
       <div className="flex w-full items-start gap-2">
         <StatusBadge status={paper.status} />
         <p className="font-ui text-[11px] whitespace-nowrap text-muted">{paper.date}</p>
@@ -25,6 +29,6 @@ export default function PaperCard({ paper }: { paper: Paper }) {
           </div>
         ))}
       </div>
-    </div>
+    </Link>
   );
 }
