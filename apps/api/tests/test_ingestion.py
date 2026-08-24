@@ -63,14 +63,23 @@ def test_detected_sections_are_queryable(client, project):
     assert nested["start_page"] == 2
 
 
-def test_token_count_is_left_null_for_sprint_3(client, project):
+def test_page_token_counts_are_populated(client, project):
+    """Sprint 2 left these NULL pending a tokenizer; Sprint 3 fills them in."""
     paper_id = upload(client, project["id"]).json()["id"]
 
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT token_count FROM paper_pages WHERE paper_id = %s", (paper_id,)
+            "SELECT token_count, character_count FROM paper_pages WHERE paper_id = %s",
+            (paper_id,),
         )
-        assert all(row["token_count"] is None for row in cur.fetchall())
+        rows = cur.fetchall()
+
+    assert rows
+    for row in rows:
+        assert row["token_count"] is not None
+        assert row["token_count"] > 0
+        # Sanity: tokens should be fewer than characters for English prose.
+        assert row["token_count"] < row["character_count"]
 
 
 # --- duplicates -------------------------------------------------------------

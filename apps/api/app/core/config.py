@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:3000"
 
+    # Chunking. PRD Section 3.2 commits to benchmarking 400 / 600 / 800 tokens,
+    # so these are configuration, not constants. 600 is a mid-range starting
+    # point, not a measured result.
+    chunk_max_tokens: int = 600
+    chunk_overlap_tokens: int = 80
+
+    # How many chunks a search returns before Sprint 4 adds reranking.
+    search_top_k: int = 20
+
     supabase_url: str = ""
     supabase_service_role_key: str = ""
     supabase_storage_bucket: str = "papers"

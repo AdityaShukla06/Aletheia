@@ -13,17 +13,28 @@ from uuid import UUID
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.session import get_connection
+from app.services.chunking import Chunk, chunk_pages
+from app.services.embedding import (
+    EmbeddingError,
+    build_embedding_provider,
+    build_token_counter,
+)
 from app.services.parsing import build_parser
 from app.services.providers import ParsedDocument, ParserError
 from app.services.storage import StorageError, build_storage
 
 log = get_logger(__name__)
 
-# (stage name, progress when that stage completes)
-STAGE_DOWNLOAD = ("downloading", 0.1)
-STAGE_PARSE = ("parsing", 0.5)
-STAGE_PERSIST = ("persisting", 0.9)
+# (stage name, progress when that stage begins)
+STAGE_DOWNLOAD = ("downloading", 0.05)
+STAGE_PARSE = ("parsing", 0.2)
+STAGE_PERSIST = ("persisting", 0.4)
+STAGE_CHUNK = ("chunking", 0.55)
+STAGE_EMBED = ("embedding", 0.7)
 STAGE_DONE = ("complete", 1.0)
+
+# Embedding is batched so a long paper is not one model call per chunk.
+EMBED_BATCH_SIZE = 32
 
 
 def _set_stage(conn, job_id: UUID, stage: str, progress: float) -> None:
@@ -64,22 +75,35 @@ def _fail(job_id: UUID, paper_id: UUID, message: str) -> None:
         log.exception("Could not record failure for paper %s", paper_id)
 
 
-def _persist(conn, paper_id: UUID, parsed: ParsedDocument) -> None:
+def _persist(
+    conn,
+    paper_id: UUID,
+    parsed: ParsedDocument,
+    token_counts: dict[int, int],
+) -> dict[int, str]:
     """Write pages, sections, and metadata in a single transaction.
 
     Deletes any prior extraction first so a reprocess is idempotent rather than
-    accumulating duplicate pages.
+    accumulating duplicate pages. Returns page_number -> page id, which the
+    chunk writer needs so chunk -> page -> paper stays resolvable (PRD 5.2).
     """
+    page_ids: dict[int, str] = {}
+
     with conn.cursor() as cur:
+        # paper_chunks cascades from paper_pages, so deleting pages clears the
+        # old chunks too — a reprocess replaces rather than accumulates.
         cur.execute("DELETE FROM paper_pages WHERE paper_id = %s", (str(paper_id),))
         cur.execute("DELETE FROM paper_sections WHERE paper_id = %s", (str(paper_id),))
+        cur.execute("DELETE FROM paper_chunks WHERE paper_id = %s", (str(paper_id),))
 
         for page in parsed.pages:
             cur.execute(
                 """
                 INSERT INTO paper_pages
-                    (paper_id, page_number, raw_text, cleaned_text, character_count)
-                VALUES (%s, %s, %s, %s, %s)
+                    (paper_id, page_number, raw_text, cleaned_text,
+                     character_count, token_count)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
                 """,
                 (
                     str(paper_id),
@@ -87,10 +111,10 @@ def _persist(conn, paper_id: UUID, parsed: ParsedDocument) -> None:
                     page.raw_text,
                     page.cleaned_text,
                     len(page.cleaned_text),
+                    token_counts.get(page.page_number),
                 ),
             )
-            # token_count is deliberately left NULL — token counting is a
-            # Sprint 3 deliverable.
+            page_ids[page.page_number] = str(cur.fetchone()["id"])
 
         for section in parsed.sections:
             cur.execute(
@@ -130,6 +154,47 @@ def _persist(conn, paper_id: UUID, parsed: ParsedDocument) -> None:
                 str(paper_id),
             ),
         )
+
+    return page_ids
+
+
+def _persist_chunks(
+    conn,
+    paper_id: UUID,
+    chunks: list[Chunk],
+    vectors: list[list[float]],
+    page_ids: dict[int, str],
+    model_name: str,
+) -> None:
+    if len(chunks) != len(vectors):
+        raise EmbeddingError(
+            f"{len(vectors)} vectors for {len(chunks)} chunks — refusing to "
+            "store misaligned embeddings."
+        )
+
+    with conn.cursor() as cur:
+        for chunk, vector in zip(chunks, vectors, strict=True):
+            cur.execute(
+                """
+                INSERT INTO paper_chunks
+                    (paper_id, page_id, section, chunk_index, content,
+                     token_count, embedding, start_offset, end_offset,
+                     embedding_model, embedded_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                """,
+                (
+                    str(paper_id),
+                    page_ids.get(chunk.page_number),
+                    chunk.section,
+                    chunk.chunk_index,
+                    chunk.content,
+                    chunk.token_count,
+                    str(vector),
+                    chunk.start_offset,
+                    chunk.end_offset,
+                    model_name,
+                ),
+            )
 
 
 def process_paper(paper_id: UUID, job_id: UUID) -> None:
@@ -189,11 +254,52 @@ def process_paper(paper_id: UUID, job_id: UUID) -> None:
         _fail(job_id, paper_id, f"Unexpected error while parsing: {exc}")
         return
 
+    # --- chunk + embed ---
+    # Done before opening the write transaction: both are slow, and holding a
+    # transaction open across a model call would pin a pooled connection.
+    try:
+        with get_connection() as conn:
+            _set_stage(conn, job_id, *STAGE_CHUNK)
+
+        provider = build_embedding_provider()
+        counter = build_token_counter()
+
+        page_token_counts = {
+            page.page_number: counter.count(page.cleaned_text)
+            for page in parsed.pages
+        }
+
+        chunks = chunk_pages(
+            parsed.pages,
+            parsed.sections,
+            counter,
+            max_tokens=settings.chunk_max_tokens,
+            overlap_tokens=settings.chunk_overlap_tokens,
+        )
+
+        with get_connection() as conn:
+            _set_stage(conn, job_id, *STAGE_EMBED)
+
+        vectors: list[list[float]] = []
+        for start in range(0, len(chunks), EMBED_BATCH_SIZE):
+            batch = chunks[start : start + EMBED_BATCH_SIZE]
+            vectors.extend(provider.embed(texts=[c.content for c in batch]))
+    except EmbeddingError as exc:
+        _fail(job_id, paper_id, str(exc))
+        return
+    except Exception as exc:
+        log.exception("Chunking/embedding failed for paper %s", paper_id)
+        _fail(job_id, paper_id, f"Could not chunk or embed the document: {exc}")
+        return
+
     # --- persist ---
     try:
         with get_connection() as conn:
             _set_stage(conn, job_id, *STAGE_PERSIST)
-            _persist(conn, paper_id, parsed)
+            page_ids = _persist(conn, paper_id, parsed, page_token_counts)
+            _persist_chunks(
+                conn, paper_id, chunks, vectors, page_ids, provider.name
+            )
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -204,6 +310,8 @@ def process_paper(paper_id: UUID, job_id: UUID) -> None:
                     """,
                     (STAGE_DONE[0], STAGE_DONE[1], str(job_id)),
                 )
+            # Pages, sections, chunks, and vectors all land together or not at
+            # all — a half-embedded paper would look ready but retrieve badly.
             conn.commit()
     except Exception as exc:
         log.exception("Could not persist extraction for paper %s", paper_id)
@@ -211,10 +319,12 @@ def process_paper(paper_id: UUID, job_id: UUID) -> None:
         return
 
     log.info(
-        "Processed paper %s: %d pages, %d sections",
+        "Processed paper %s: %d pages, %d sections, %d chunks embedded with %s",
         paper_id,
         len(parsed.pages),
         len(parsed.sections),
+        len(chunks),
+        provider.name,
     )
 
 

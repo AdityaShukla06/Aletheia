@@ -3,10 +3,11 @@
 Multimodal research-paper understanding, built phase by phase from a text-RAG foundation.
 See [PRD.md](PRD.md) for scope and [PROGRESS.md](PROGRESS.md) for live project state.
 
-> **Current state: Phase 1, Sprint 2 (PDF processing).**
-> Upload, storage, and text extraction — pages, metadata, and detected sections.
-> No chunking, embeddings, retrieval, or LLM calls; those are Sprints 3–4 and are
-> deliberately not implemented.
+> **Current state: Phase 1, Sprint 3 (chunking + embeddings).**
+> Upload, extraction, chunking, local embeddings, and semantic search.
+> No reranking, grounded answers, or LLM calls — those are Sprint 4 and are
+> deliberately not implemented. Retrieval quality has not yet been measured
+> against a benchmark (Sprint 6).
 
 ## Prerequisites
 
@@ -65,8 +66,9 @@ Open http://localhost:3000, create a project, and upload a PDF.
 cd apps/api && ../../.venv/bin/python -m pytest
 ```
 
-Tests run against the same local Postgres and create/clean up their own rows, so the
-database must be up and migrated first.
+The suite creates and migrates its own `research_intelligence_test` database on the same
+Postgres instance, so running it does not touch your development data. The container must
+be up. Real embeddings run in the tests — there is no stub.
 
 ## Layout
 
@@ -96,13 +98,33 @@ storage/           Uploaded PDFs (git-ignored, created at runtime)
 | `GET /papers/{id}/pages` | Extracted page text, in page order |
 | `GET /papers/{id}/sections` | Detected sections, in document order |
 | `POST /papers/{id}/reprocess` | Retry extraction for a failed or stranded paper |
+| `POST /projects/{id}/search` | Semantic search over the project's chunks; returns page, section, and similarity |
 
-### How extraction runs
+### How ingestion runs
 
-Upload returns immediately and extraction runs in-process as a FastAPI background task,
-walking the job through `downloading → parsing → persisting → complete`. Because it is
-in-process, it does not survive a server restart mid-run — on startup, any job left
-`running` or `pending` is marked failed with an explanation and can be retried from the UI.
+Upload returns immediately and processing runs in-process as a FastAPI background task,
+walking the job through `downloading → parsing → chunking → embedding → persisting →
+complete`. Because it is in-process, it does not survive a server restart mid-run — on
+startup, any job left `running` or `pending` is marked failed with an explanation and can
+be retried from the UI.
+
+### Embeddings
+
+Embeddings run locally through `fastembed` (ONNX) — no API key, no spend, no network at
+inference time. The model (`jinaai/jina-embeddings-v2-small-en`, 512-dim) downloads once
+(~120MB) on first use and is cached; the first call after a restart takes ~25s to load.
+
+The model was chosen for its 8192-token context: PRD §3.2 commits to benchmarking 400/600/800
+token chunks, and the more obvious small models truncate at 512 (or 256), which would silently
+invalidate most of that benchmark. Reasoning is recorded in [PROGRESS.md](PROGRESS.md).
+
+Chunk size and overlap are configurable (`CHUNK_MAX_TOKENS`, `CHUNK_OVERLAP_TOKENS`). The
+defaults of 600/80 are a starting point, **not** a benchmarked result. Changing them requires
+reprocessing existing papers.
+
+> **Vectors are model-specific.** Every chunk records the model that produced it. Changing
+> models invalidates stored vectors — comparing across models degrades ranking silently
+> rather than raising an error, so re-embed rather than mixing.
 
 ## Notes for the next sprint
 

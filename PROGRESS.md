@@ -3,6 +3,39 @@
 Shared status file for coordinating Claude Code (repo/backend execution) and Claude Cowork (planning/docs/research) on this project. Whoever touches this project next — either tool, either session — should read this file first and update it before signing off.
 
 ## Current phase / sprint
+Phase 1, **Sprint 3 (chunking + embeddings) — code complete and verified end to end** as of 2026-08-24. Sprint 4 (RAG) not started.
+
+**Verified working** (each actually run):
+- **91/91 tests passing** (54 at end of Sprint 2), and passing in a clean venv built only from `requirements.txt`.
+- **Test isolation fixed:** the suite creates and migrates its own `research_intelligence_test` database via the same migration runner as the app. Confirmed dev data is untouched after a full run.
+- Chunking: token-bounded, paragraph-aware, sentence-granular overlap, section attribution, offsets into the page. Chunks never span pages, so a citation always resolves to one page (PRD 5.2).
+- All three PRD §3.2 benchmark sizes (400 / 600 / 800) are usable and covered by a parametrized test — the reason the model was switched.
+- Embeddings: real model, 512-dim, L2-normalized, deterministic for identical input; related text scores above unrelated.
+- Token counting uses the model's own tokenizer and reflects subword splits, so chunk budgets mean what they say.
+- **Retrieval verified semantically, not just structurally:** a three-topic corpus returns the correct page for each of three distinct queries, and on real papers ResNet content ranks 0.83–0.89 while an unrelated filler document ranks 0.65–0.69.
+- Search scoped to its project; reprocess does not duplicate chunks; every stored chunk has a vector, a model name, and a resolvable page.
+- Verified in a browser end to end, including the ranked result list with section and page attribution.
+
+**Not yet confirmed / deliberately absent:** no reranking, context builder, evidence IDs, LLM calls, or grounded answers — all Sprint 4. Supabase still unwired. No auth. Retrieval quality has **not** been measured against a benchmark; PRD §12 still requires that, and the benchmark is a Sprint 6 deliverable (unresolved sequencing gap, below).
+
+Sprint 2 archived at `tasks/sprint-2.md`; Sprint 3 record at `tasks/todo.md`.
+
+### Sprint 3 decisions (resolved 2026-08-24, both were blocking)
+- **Embeddings: local via `fastembed`** (ONNX, offline, no API key, no spend, real embeddings runnable in CI). Hosted providers stay a config swap behind `EmbeddingProvider`.
+- **Test isolation: fixed this sprint.** Tests move to their own database instead of sharing the app's and mutating real rows.
+
+### ⚠️ Model choice changed from what was proposed — PRD §3.2 forced it
+Proposed `BAAI/bge-small-en-v1.5` (384-dim). **Rejected after checking the actual model limits: it truncates at 512 input tokens.** PRD §3.2 commits to benchmarking chunk sizes of **400 / 600 / 800 tokens** — with a 512-token model, the 600 and 800 arms would be silently truncated and produce meaningless benchmark numbers that still look successful. That is exactly the "never silently swallow" failure the PRD warns against.
+
+**Using `jinaai/jina-embeddings-v2-small-en` instead: 512-dim, 8192-token context, 120MB.** It covers all three benchmark arms with headroom. Verified working on this Python 3.14 venv: loads in ~25s, embeds in ~0.01s, returns L2-normalized vectors (so cosine is the right pgvector index).
+
+*Consequence:* `paper_chunks.embedding` is fixed at **512 dimensions**. Changing the model later means re-embedding every chunk, so the chunk rows record which model produced them.
+
+*Also checked and rejected:* `all-MiniLM-L6-v2` truncates at only **256** tokens — worse for this purpose than either.
+
+**Token counting uses the embedding model's own tokenizer**, not `tiktoken`. `tiktoken` is OpenAI's BPE and would miscount for this model, and chunk sizes must be measured in the tokens the model actually sees.
+
+## Previous sprint
 Phase 1, **Sprint 2 (PDF processing) — code complete and verified end to end** as of 2026-08-24. Sprint 1 archived at `tasks/sprint-1.md`; Sprint 2 record at `tasks/todo.md`. Sprint 3 (chunking + embeddings) is not started.
 
 **Verified working** (each actually run, not assumed):
@@ -54,13 +87,14 @@ This file is the shared source of truth between Claude Code (implementation) and
 - **Migrations: plain numbered SQL files + a small runner script**, no ORM/Alembic. *Why:* PRD Section 6 lists no migration library, four tables do not justify one, and plain SQL matches the format the Supabase CLI already consumes — making the eventual move a file move rather than a rewrite.
 - **DB access: raw SQL via a Postgres driver, no ORM.** *Why:* Section 6 specifies FastAPI + Pydantic only; Sprint 1 has a handful of queries and an ORM would be over-engineering at this scope.
 
-## Handoff notes for Sprint 3
-- **Chunk from `paper_pages.cleaned_text`, not `raw_text`.** Paragraph breaks (`\n\n`) survive normalization and are the natural chunk boundary. This nearly did not work — see the normalization ordering bug in the log below — so there is now a regression test (`test_whitespace_padded_blank_lines_still_break_paragraphs`) guarding it. Do not reorder the steps in `normalization.py` without rerunning it.
-- **Map chunks to sections via `paper_sections.start_offset`**, which is an offset into that page's `cleaned_text`. It is NULL when the heading could not be located after normalization; handle that rather than assuming it is set.
-- `paper_pages.token_count` is intentionally NULL everywhere. Token counting is a Sprint 3 deliverable and needs a tokenizer choice first — that choice is not made yet and is not implied by anything in the codebase.
-- `paper_chunks.embedding` is still an unconstrained `vector` with no ANN index. Set dimensionality and index type once the embedding model is chosen; picking either now is guesswork.
-- **Test isolation is a known weakness.** Tests run against the same local database as the app, and `recover_stranded_jobs()` is global — running the suite mutates non-test rows. It genuinely did so during Sprint 2. Before the suite grows further, point tests at a separate database.
-- Extraction is in-process (`BackgroundTasks`). If Sprint 3 makes ingestion meaningfully slower (embedding API calls will), revisit the worker decision — the tradeoff was accepted for Sprint 2's workload, not permanently.
+## Handoff notes for Sprint 4 (RAG)
+- **`POST /projects/{id}/search` already returns everything the context builder needs**: chunk id, content, section, page number, paper id/title, and similarity. Sprint 4 should rerank that candidate set down to 5–8, not re-query.
+- **Do not let the LLM invent citation labels** (PRD §5.3). The evidence IDs handed to the model must be generated backend-side from the chunk ids this endpoint already returns, and resolved back through chunk → page → paper. That path is intact and tested.
+- **A chunk can legitimately have `section = NULL`** — content before the first detected heading (a paper's title block, for instance). Citations must degrade to "page N" rather than rendering "null".
+- **Vectors are model-specific.** Every chunk records `embedding_model`. If the model ever changes, existing vectors are invalid and must be re-embedded — comparing across models silently produces garbage rankings rather than an error. Check the column before assuming a project's vectors are comparable.
+- Chunk size and overlap are `CHUNK_MAX_TOKENS` / `CHUNK_OVERLAP_TOKENS` in settings, and all three PRD §3.2 sizes are supported. Changing either requires reprocessing papers to take effect.
+- Ingestion is still in-process (`BackgroundTasks`) and now does real model work. It is fast locally with a cached model, but Sprint 4's LLM calls are a good moment to revisit the worker decision.
+- The embedding model loads lazily and takes ~25s on the very first call in a fresh process (cached thereafter). The first request after an API restart pays that cost.
 
 ## Known unresolved issues in the PRD (flagged during Cowork review)
 - Section 12 requires retrieval to be "measurable against benchmark data" before Phase 2 starts, but the benchmark (Sprint 6) is scheduled after the sprints that criterion gates. Needs a decision: pull a rough benchmark earlier, or treat the criterion as unenforceable until Sprint 6.
@@ -73,6 +107,9 @@ This file is the shared source of truth between Claude Code (implementation) and
 - Training-scale corpus (S2ORC / PMC): on hold pending the Phase 6 scope decision above.
 
 ## Log
+- **2026-08-24** — **Sprint 3 complete, 91/91 tests passing**, verified in a clean venv built only from `requirements.txt`. Frontend gained a semantic search panel showing ranked passages with section, page, and similarity. Verified in a browser against the two real dev papers: ResNet content ranks 0.83–0.89 for a residual-connections query while an unrelated filler document ranks 0.65–0.69, so the ordering is genuinely semantic rather than incidental. **A caution worth recording:** an early check of `paper_chunks` showed zero rows and briefly looked like embeddings were not running — it was the test fixture's cascade delete at teardown. Counting rows *after* a suite run proves nothing; assert inside the test.
+- **2026-08-24** — **Sprint 3 backend complete: 91/91 tests passing** (54 at end of Sprint 2). Test isolation fixed first — the suite now creates and migrates its own `research_intelligence_test` database using the same migration runner as the app, so it can no longer mutate dev data (verified: dev rows untouched after a full run). Migration `0004` pins `paper_chunks.embedding` to `vector(512)`, adds an HNSW cosine index, and records `embedding_model`/`embedded_at` per chunk so a model swap is detectable rather than silently mixing vector spaces. Chunker is section/paragraph-aware, token-bounded, with sentence-granular overlap; chunks never span pages so a citation always resolves to one page (PRD 5.2). Ingestion gained `chunking` and `embedding` stages, batched at 32. `POST /projects/{id}/search` does semantic top-k. **Retrieval verified semantically, not just structurally** — a three-topic corpus returns the correct page for each of three distinct queries. Frontend not updated yet at time of writing.
+- **2026-08-24** — **Sprint 3 opened.** Reread PROGRESS.md first (no Cowork changes since `72c0eeb`; the PRD §7 `paper_sections` gap flagged in Sprint 2 is still open on their side). Verified `fastembed` and `tiktoken` resolve on Python 3.14 before planning around them. Both blocking decisions resolved. **Caught a model/PRD conflict before writing any code:** the proposed embedding model truncates at 512 tokens while PRD §3.2 commits to benchmarking 600- and 800-token chunks — switched models rather than ship a benchmark that silently truncates two of its three arms. Details above.
 - **2026-08-24** — **Sprint 2 complete, 54/54 tests passing.** Frontend updated: live status polling (only while a job is actually in flight), page counts, expandable section outline with nesting, per-paper error display, and a Retry button. **Two further bugs found by verifying rather than reviewing:** (1) papers uploaded before extraction existed sat at `pending` forever with no recovery path and caused the UI to poll indefinitely — startup recovery now also strands `pending` jobs, and Retry is offered for them; (2) **normalization destroyed every paragraph break** — PDFs pad "blank" lines with spaces, and single newlines were collapsed to spaces *before* that padding was trimmed, so `\n\n` never formed. This would have left Sprint 3's paragraph-aware chunker with no boundaries to chunk on. Fixed by trimming whitespace around line breaks first; confirmed on a real PDF (page 1 went from 0 to 2 paragraph breaks) and covered by a regression test.
 - **2026-08-24** — **Sprint 2 backend complete: 52/52 tests passing** (was 15 at end of Sprint 1). Migration `0003` adds `paper_sections`, `UNIQUE(project_id, sha256)`, and job retry columns. `PyMuPDFParser` implements the widened `DocumentParser`; extraction runs as a background task and writes pages, sections, and metadata. Added `GET /papers/{id}/pages`, `GET /papers/{id}/sections`, `POST /papers/{id}/reprocess`, plus startup recovery for jobs stranded by a restart. **Three bugs found by tests, all real:** (1) section detection ran on normalized text, but normalization collapses the newlines that make a heading identifiable — detection now reads raw text and resolves offsets into cleaned text; (2) abstract extraction had the same root cause and is now derived from detected section boundaries; (3) de-hyphenation turned `state-\nof-the-art` into `stateof-the-art` because the greedy quantifier backtracked to a partial word. Frontend not updated yet at time of writing.
 - **2026-08-24** — **Sprint 2 opened.** Reread PROGRESS.md first (no Cowork changes since 2026-08-23). Confirmed PyMuPDF 1.28.2 installs and imports on this Python 3.14 venv before planning around it. Restored the stack after an overnight restart — Docker volume persisted, migrations still applied, Sprint 1 data intact. Both blocking Sprint 2 decisions resolved (see above). Sprint 1 plan archived to `tasks/sprint-1.md`; `tasks/todo.md` is now the Sprint 2 plan. **Flagged a PRD schema gap** (Section 12 needs section storage that Section 7 does not define) — see above; Cowork should update Section 7.
