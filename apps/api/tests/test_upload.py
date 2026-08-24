@@ -101,6 +101,14 @@ def test_upload_to_unknown_project_is_404_and_stores_nothing(client, storage_roo
     assert not (storage_root / str(missing)).exists()
 
 
+def test_upload_response_reports_the_job_as_queued(client, project):
+    """The upload response is returned before the background task runs."""
+    body = upload(client, project["id"]).json()
+
+    assert body["job"]["status"] == "pending"
+    assert body["job"]["stage"] == "queued"
+
+
 def test_listing_papers_returns_paper_with_its_job(client, project):
     uploaded = upload(client, project["id"]).json()
 
@@ -110,7 +118,10 @@ def test_listing_papers_returns_paper_with_its_job(client, project):
     papers = response.json()
     assert len(papers) == 1
     assert papers[0]["id"] == uploaded["id"]
-    assert papers[0]["job"]["status"] == "pending"
+    # Sprint 2: extraction runs in the background, so by the time this is
+    # queried the job has finished. (Sprint 1 asserted 'pending' here, when
+    # nothing consumed jobs.)
+    assert papers[0]["job"]["status"] == "succeeded"
 
 
 def test_get_single_paper(client, project):
@@ -120,7 +131,7 @@ def test_get_single_paper(client, project):
 
     assert response.status_code == 200
     assert response.json()["id"] == uploaded["id"]
-    assert response.json()["job"]["stage"] == "queued"
+    assert response.json()["job"]["stage"] == "complete"
 
 
 def test_get_unknown_paper_is_404(client):

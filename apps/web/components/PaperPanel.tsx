@@ -2,15 +2,16 @@
 
 import { useRef, useState } from "react";
 import type { Paper } from "@/types/api";
-import { StatusBadge } from "./StatusBadge";
+import { PaperRow } from "./PaperRow";
 
 interface Props {
   papers: Paper[];
   disabled: boolean;
   onUpload: (file: File) => Promise<void>;
+  onRetry: (paperId: string) => Promise<void>;
 }
 
-export function PaperPanel({ papers, disabled, onUpload }: Props) {
+export function PaperPanel({ papers, disabled, onUpload, onRetry }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -80,20 +81,7 @@ export function PaperPanel({ papers, disabled, onUpload }: Props) {
       ) : (
         <ul className="flex flex-col divide-y divide-neutral-200 dark:divide-neutral-800">
           {papers.map((paper) => (
-            <li
-              key={paper.id}
-              className="flex items-start justify-between gap-4 py-3"
-            >
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium">
-                  {paper.title ?? paper.filename}
-                </p>
-                <p className="mt-0.5 font-mono text-xs text-neutral-500">
-                  {paper.sha256 ? `sha256 ${paper.sha256.slice(0, 12)}…` : "—"}
-                </p>
-              </div>
-              <StatusBadge paper={paper} />
-            </li>
+            <PaperRow key={paper.id} paper={paper} onRetry={onRetry} />
           ))}
         </ul>
       )}
